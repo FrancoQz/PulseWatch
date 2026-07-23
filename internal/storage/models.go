@@ -16,4 +16,5 @@ type Check struct {
 	StatusCode int
 	LatencyMs  int
 	IsUp       bool
+	Error      string // Campo para registrar la razón de la falla.
 }

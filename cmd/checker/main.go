@@ -15,26 +15,43 @@ import (
 
 const defaultInterval = 60 * time.Second
 
+// httpClient se crea una sola vez y se comparte entre todas las goroutines.
+// El http.Client es seguro para uso concurrente y mantiene un pool de
+// conexiones reutilizables, así que crear uno por chequeo sería un desperdicio.
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
+
 func check(ctx context.Context, svc storage.Service) storage.Check {
 	start := time.Now()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, svc.URL, nil)
 	if err != nil {
-		return storage.Check{ServiceID: svc.ID, IsUp: false}
+		return storage.Check{
+			ServiceID: svc.ID,
+			IsUp:      false,
+			Error:     err.Error(), // Captura si falla armar la request
+		}
 	}
+	req.Header.Set("User-Agent", "PulseWatch/1.0 (+https://github.com/FrancoQz/PulseWatch)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return storage.Check{ServiceID: svc.ID, IsUp: false}
+		return storage.Check{
+			ServiceID: svc.ID,
+			IsUp:      false,
+			Error:     err.Error(), // Captura si falla la red / conexión / timeout
+		}
 	}
 	defer resp.Body.Close()
 
+	// Si llegó hasta acá, la petición HTTP completó sin error de red
 	return storage.Check{
 		ServiceID:  svc.ID,
 		StatusCode: resp.StatusCode,
 		LatencyMs:  int(time.Since(start).Milliseconds()),
 		IsUp:       resp.StatusCode < 400,
+		Error:      "", // No hubo error de red (si dio 404/500, IsUp es false pero el status_code lo explica)
 	}
 }
 

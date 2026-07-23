@@ -1,0 +1,1 @@
+ALTER TABLE checks ADD COLUMN error TEXT;

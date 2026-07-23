@@ -53,9 +53,9 @@ func (s *Storage) ListServices(ctx context.Context) ([]Service, error) {
 // SaveCheck persiste el resultado de un chequeo.
 func (s *Storage) SaveCheck(ctx context.Context, c Check) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO checks (service_id, status_code, latency_ms, is_up)
-		 VALUES ($1, $2, $3, $4)`,
-		c.ServiceID, c.StatusCode, c.LatencyMs, c.IsUp)
+		`INSERT INTO checks (service_id, status_code, latency_ms, is_up, error)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, ''))`,
+		c.ServiceID, c.StatusCode, c.LatencyMs, c.IsUp, c.Error)
 	if err != nil {
 		return fmt.Errorf("guardando check: %w", err)
 	}
