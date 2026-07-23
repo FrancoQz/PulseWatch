@@ -1,0 +1,15 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: pulsewatch-db
+    environment:
+      POSTGRES_USER: pulsewatch
+      POSTGRES_PASSWORD: pulsewatch_dev
+      POSTGRES_DB: pulsewatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pulsewatch_data:/var/lib/postgresql/data
+
+volumes:
+  pulsewatch_data:
