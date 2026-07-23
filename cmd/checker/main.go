@@ -2,21 +2,29 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/FrancoQz/PulseWatch/internal/storage"
 )
 
-func check(svc storage.Service) storage.Check {
-	start := time.Now()
-	client := &http.Client{Timeout: 10 * time.Second}
+const defaultInterval = 60 * time.Second
 
-	resp, err := client.Get(svc.URL)
+func check(ctx context.Context, svc storage.Service) storage.Check {
+	start := time.Now()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, svc.URL, nil)
+	if err != nil {
+		return storage.Check{ServiceID: svc.ID, IsUp: false}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return storage.Check{ServiceID: svc.ID, IsUp: false}
 	}
@@ -30,8 +38,46 @@ func check(svc storage.Service) storage.Check {
 	}
 }
 
+// runCycle chequea todos los servicios una vez y guarda los resultados.
+func runCycle(ctx context.Context, store *storage.Storage) {
+	services, err := store.ListServices(ctx)
+	if err != nil {
+		log.Printf("no pude leer los servicios: %v", err)
+		return
+	}
+
+	if len(services) == 0 {
+		log.Println("no hay servicios cargados")
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, svc := range services {
+		wg.Add(1)
+		go func(s storage.Service) {
+			defer wg.Done()
+
+			result := check(ctx, s)
+
+			if err := store.SaveCheck(ctx, result); err != nil {
+				log.Printf("error guardando %s: %v", s.Name, err)
+				return
+			}
+
+			estado := "UP"
+			if !result.IsUp {
+				estado = "DOWN"
+			}
+			log.Printf("%-12s %-4s %4dms", s.Name, estado, result.LatencyMs)
+		}(svc)
+	}
+	wg.Wait()
+}
+
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -44,30 +90,29 @@ func main() {
 	}
 	defer store.Close()
 
-	services, err := store.ListServices(ctx)
-	if err != nil {
-		log.Fatalf("no pude leer los servicios: %v", err)
+	interval := defaultInterval
+	if v := os.Getenv("CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			log.Printf("CHECK_INTERVAL invalido (%q), uso %v", v, interval)
+		}
 	}
 
-	var wg sync.WaitGroup
-	for _, svc := range services {
-		wg.Add(1)
-		go func(s storage.Service) {
-			defer wg.Done()
+	log.Printf("PulseWatch arrancando — chequeos cada %v", interval)
 
-			result := check(s)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-			if err := store.SaveCheck(ctx, result); err != nil {
-				log.Printf("error guardando %s: %v", s.Name, err)
-				return
-			}
+	runCycle(ctx, store) // primera vuelta inmediata
 
-			estado := "UP"
-			if !result.IsUp {
-				estado = "DOWN"
-			}
-			fmt.Printf("%-10s %-4s %dms\n", s.Name, estado, result.LatencyMs)
-		}(svc)
+	for {
+		select {
+		case <-ticker.C:
+			runCycle(ctx, store)
+		case <-ctx.Done():
+			log.Println("apagando...")
+			return
+		}
 	}
-	wg.Wait()
 }
